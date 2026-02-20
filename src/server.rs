@@ -24,6 +24,11 @@ mod inner {
         pub prompt: String,
     }
 
+    #[derive(Deserialize)]
+    pub struct GeminiRequest {
+        pub prompt: String,
+    }
+
     pub async fn start() {
         dotenv().ok();
         
@@ -37,6 +42,7 @@ mod inner {
         let app = Router::new()
             .route("/api/research", post(proxy_you_com))
             .route("/api/visualize", post(proxy_visualize))
+            .route("/api/gemini", post(proxy_gemini))
             .route("/api/foxit", post(proxy_foxit))
             .fallback_service(ServeDir::new("dist"))
             .layer(cors);
@@ -117,6 +123,47 @@ mod inner {
                 (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
             }
         }
+    }
+
+    async fn proxy_gemini(Json(payload): Json<GeminiRequest>) -> Response {
+        let api_key = env::var("GEMINI_API_KEY").ok();
+        
+        if let Some(key) = api_key {
+            if !key.is_empty() {
+                let client = reqwest::Client::new();
+                let url = format!("https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={}", key);
+                
+                let body = serde_json::json!({
+                    "contents": [{
+                        "parts": [{
+                            "text": format!("Write a short film scene description based on this research: {}", payload.prompt)
+                        }]
+                    }]
+                });
+
+                let resp = client.post(&url).json(&body).send().await;
+
+                if let Ok(res) = resp {
+                    let status = res.status();
+                    let body = res.text().await.unwrap_or_default();
+                    if status.is_success() {
+                        return (status, body).into_response();
+                    }
+                }
+            }
+        }
+
+        // MOCK for Hackathon
+        let mock_script = format!("INT. SPACE STATION - DAY\n\nResearch indicates: {}\n\nWe see a lone astronaut staring out the viewport at the swirling nebula. The hum of the life support systems is the only sound.\n\nASTRONAUT\n(to herself)\nWe made it. But at what cost?\n\nFade out.", payload.prompt);
+        Json(serde_json::json!({
+            "candidates": [{
+                "content": {
+                    "parts": [{
+                        "text": mock_script
+                    }]
+                }
+            }]
+        })).into_response()
     }
 
     async fn proxy_foxit() -> Response {
