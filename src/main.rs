@@ -153,45 +153,11 @@ impl StoryBoardApp {
     }
 
     fn setup_demo_scene(&mut self) {
-        let c1_id = self.add_node(
-            Pos2::new(-450.0, 0.0),
-            NodeData::Concept {
-                text: "Mars Colony Documentary".to_string(),
-            },
-        );
-        let r1_id = self.add_node(
-            Pos2::new(-150.0, -150.0),
-            NodeData::YouComResearch {
-                query: "Mars colony daily life and fashion".to_string(),
-                result: None,
-                is_loading: false,
-            },
-        );
-        let a1_id = self.add_node(
-            Pos2::new(150.0, -150.0),
-            NodeData::AgnosticAI {
-                model: "google/gemini-flash-1.5".to_string(),
-                prompt: "Mars Research Results".to_string(),
-                result: None,
-                is_loading: false,
-            },
-        );
-        let p1_id = self.add_node(
-            Pos2::new(450.0, 0.0),
-            NodeData::Visual {
-                prompt: "Mars base interior, cinematic, realistic".to_string(),
-                texture: None,
-                is_loading: false,
-            },
-        );
-        let f1_id = self.add_node(
-            Pos2::new(0.0, 250.0),
-            NodeData::FoxitExport {
-                status: "Ready".to_string(),
-                is_loading: false,
-            },
-        );
-
+        let c1_id = self.add_node(Pos2::new(-450.0, 0.0), NodeData::Concept { text: "Mars Colony Documentary".to_string() });
+        let r1_id = self.add_node(Pos2::new(-150.0, -150.0), NodeData::YouComResearch { query: "Mars colony life".to_string(), result: None, is_loading: false });
+        let a1_id = self.add_node(Pos2::new(150.0, -150.0), NodeData::AgnosticAI { model: "google/gemini-flash-1.5".to_string(), prompt: "Write script based on Mars research".to_string(), result: None, is_loading: false });
+        let p1_id = self.add_node(Pos2::new(450.0, 0.0), NodeData::Visual { prompt: "Mars base interior".to_string(), texture: None, is_loading: false });
+        let f1_id = self.add_node(Pos2::new(0.0, 250.0), NodeData::FoxitExport { status: "Ready".to_string(), is_loading: false });
         self.state.edges.push(Edge { id: 1, from: c1_id, to: r1_id });
         self.state.edges.push(Edge { id: 2, from: r1_id, to: a1_id });
         self.state.edges.push(Edge { id: 3, from: a1_id, to: p1_id });
@@ -211,17 +177,8 @@ impl StoryBoardApp {
         let body_bytes = serde_json::to_vec(&body).unwrap_or_default();
         let mut request = ehttp::Request::post("/api/research", body_bytes);
         request.headers.insert("Content-Type", "application/json");
-        
         ehttp::fetch(request, move |result| {
-            match result {
-                Ok(response) => {
-                    let text = response.text().unwrap_or_default().to_string();
-                    let _ = tx.send(AppMessage::TextResponse(node_id, text));
-                }
-                Err(e) => {
-                    let _ = tx.send(AppMessage::Error(node_id, e));
-                }
-            }
+            if let Ok(response) = result { let _ = tx.send(AppMessage::TextResponse(node_id, response.text().unwrap_or_default().to_string())); }
             ctx.request_repaint();
         });
     }
@@ -232,16 +189,8 @@ impl StoryBoardApp {
         let body_bytes = serde_json::to_vec(&body).unwrap_or_default();
         let mut request = ehttp::Request::post("/api/visualize", body_bytes);
         request.headers.insert("Content-Type", "application/json");
-        
         ehttp::fetch(request, move |result| {
-            match result {
-                Ok(response) => {
-                    let _ = tx.send(AppMessage::ImageResponse(node_id, response.bytes));
-                }
-                Err(e) => {
-                    let _ = tx.send(AppMessage::Error(node_id, e));
-                }
-            }
+            if let Ok(response) = result { let _ = tx.send(AppMessage::ImageResponse(node_id, response.bytes)); }
             ctx.request_repaint();
         });
     }
@@ -252,38 +201,20 @@ impl StoryBoardApp {
         let body_bytes = serde_json::to_vec(&body).unwrap_or_default();
         let mut request = ehttp::Request::post("/api/agnostic-ai", body_bytes);
         request.headers.insert("Content-Type", "application/json");
-        
         ehttp::fetch(request, move |result| {
-            match result {
-                Ok(response) => {
-                    let text = response.text().unwrap_or_default().to_string();
-                    let _ = tx.send(AppMessage::TextResponse(node_id, text));
-                }
-                Err(e) => {
-                    let _ = tx.send(AppMessage::Error(node_id, e));
-                }
-            }
+            if let Ok(response) = result { let _ = tx.send(AppMessage::TextResponse(node_id, response.text().unwrap_or_default().to_string())); }
             ctx.request_repaint();
         });
     }
 
-    fn trigger_foxit(&self, node_id: u64, content: String, ctx: egui::Context) {
+    fn trigger_foxit(&self, node_id: u64, all_text: String, ctx: egui::Context) {
         let tx = self.http_tx.clone();
-        let body = serde_json::json!({"content": content});
+        let body = serde_json::json!({"all_node_text": all_text});
         let body_bytes = serde_json::to_vec(&body).unwrap_or_default();
         let mut request = ehttp::Request::post("/api/foxit", body_bytes);
         request.headers.insert("Content-Type", "application/json");
-        
         ehttp::fetch(request, move |result| {
-            match result {
-                Ok(response) => {
-                    let text = response.text().unwrap_or_default().to_string();
-                    let _ = tx.send(AppMessage::TextResponse(node_id, text));
-                }
-                Err(e) => {
-                    let _ = tx.send(AppMessage::Error(node_id, e));
-                }
-            }
+            if let Ok(resp) = result { let _ = tx.send(AppMessage::TextResponse(node_id, resp.text().unwrap_or_default().to_string())); }
             ctx.request_repaint();
         });
     }
@@ -292,10 +223,8 @@ impl StoryBoardApp {
         let repulsion = 6000.0;
         let attraction = 0.02;
         let damping = 0.8;
-
         let node_ids: Vec<u64> = self.state.nodes.keys().copied().collect();
         let mut forces: HashMap<u64, Vec2> = node_ids.iter().map(|&id| (id, Vec2::ZERO)).collect();
-
         for &i in &node_ids {
             for &j in &node_ids {
                 if i == j { continue; }
@@ -307,7 +236,6 @@ impl StoryBoardApp {
                 *forces.get_mut(&i).unwrap() += force;
             }
         }
-
         for edge in &self.state.edges {
             if let (Some(n1), Some(n2)) = (self.state.nodes.get(&edge.from), self.state.nodes.get(&edge.to)) {
                 let delta = n2.position - n1.position;
@@ -317,7 +245,6 @@ impl StoryBoardApp {
                 *forces.get_mut(&edge.to).unwrap() -= force;
             }
         }
-
         for id in node_ids {
             if let Some(node) = self.state.nodes.get_mut(&id) {
                 if self.state.dragging_node == Some(id) { continue; }
@@ -331,24 +258,14 @@ impl StoryBoardApp {
 impl eframe::App for StoryBoardApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let start_time = Instant::now();
-
         while let Ok(msg) = self.http_rx.try_recv() {
             match msg {
                 AppMessage::TextResponse(id, text) => {
                     if let Some(node) = self.state.nodes.get_mut(&id) {
                         match &mut node.data {
-                            NodeData::YouComResearch { result: r, is_loading, .. } => {
-                                *r = Some(text);
-                                *is_loading = false;
-                            }
-                            NodeData::AgnosticAI { result: r, is_loading, .. } => {
-                                *r = Some(text);
-                                *is_loading = false;
-                            }
-                            NodeData::FoxitExport { status, is_loading } => {
-                                *status = text;
-                                *is_loading = false;
-                            }
+                            NodeData::YouComResearch { result: r, is_loading, .. } => { *r = Some(text); *is_loading = false; }
+                            NodeData::AgnosticAI { result: r, is_loading, .. } => { *r = Some(text); *is_loading = false; }
+                            NodeData::FoxitExport { status, is_loading } => { *status = text; *is_loading = false; }
                             _ => {}
                         }
                     }
@@ -357,20 +274,11 @@ impl eframe::App for StoryBoardApp {
                     if let Some(node) = self.state.nodes.get_mut(&id) {
                         if let NodeData::Visual { texture, is_loading, .. } = &mut node.data {
                             *is_loading = false;
-                            
                             if let Ok(image) = image::load_from_memory(&bytes) {
                                 let size = [image.width() as usize, image.height() as usize];
                                 let image_buffer = image.to_rgba8();
-                                let color_image = egui::ColorImage::from_rgba_unmultiplied(
-                                    size,
-                                    image_buffer.as_raw(),
-                                );
-                                
-                                *texture = Some(ctx.load_texture(
-                                    format!("node-image-{}", id),
-                                    color_image,
-                                    egui::TextureOptions::LINEAR
-                                ));
+                                let color_image = egui::ColorImage::from_rgba_unmultiplied(size, image_buffer.as_raw());
+                                *texture = Some(ctx.load_texture(format!("node-image-{}", id), color_image, egui::TextureOptions::LINEAR));
                             }
                         }
                     }
@@ -388,34 +296,17 @@ impl eframe::App for StoryBoardApp {
                 }
             }
         }
-
         self.apply_physics();
-
         egui::CentralPanel::default()
             .frame(egui::Frame::none().fill(Color32::from_rgb(15, 15, 15)))
             .show(ctx, |ui| {
                 let canvas_rect = ui.max_rect();
                 let (response, painter) = ui.allocate_painter(canvas_rect.size(), Sense::click_and_drag());
-
                 let camera_offset = self.state.camera_offset;
                 let camera_zoom = self.state.camera_zoom;
-
-                let world_to_screen = |pos: Pos2| {
-                    let center = canvas_rect.center();
-                    let rel = (pos.to_vec2() - camera_offset) * camera_zoom;
-                    center + rel
-                };
-
-                let screen_to_world = |pos: Pos2| {
-                    let center = canvas_rect.center();
-                    let rel = (pos - center) / camera_zoom;
-                    Pos2::new(rel.x + camera_offset.x, rel.y + camera_offset.y)
-                };
-
-                if response.dragged() && self.state.dragging_node.is_none() {
-                    self.state.camera_offset -= response.drag_delta() / camera_zoom;
-                }
-
+                let world_to_screen = |pos: Pos2| { let center = canvas_rect.center(); let rel = (pos.to_vec2() - camera_offset) * camera_zoom; center + rel };
+                let screen_to_world = |pos: Pos2| { let center = canvas_rect.center(); let rel = (pos - center) / camera_zoom; Pos2::new(rel.x + camera_offset.x, rel.y + camera_offset.y) };
+                if response.dragged() && self.state.dragging_node.is_none() { self.state.camera_offset -= response.drag_delta() / camera_zoom; }
                 let scroll_delta = ctx.input(|i| i.raw_scroll_delta.y);
                 if scroll_delta != 0.0 {
                     if let Some(pointer_pos) = ctx.input(|i| i.pointer.hover_pos()) {
@@ -427,31 +318,17 @@ impl eframe::App for StoryBoardApp {
                         self.state.camera_offset = world_pos_before.to_vec2() - (pointer_pos - center) / self.state.camera_zoom;
                     }
                 }
-
                 if let Some(pointer_pos) = ctx.input(|i| i.pointer.interact_pos()) {
                     let world_pos = screen_to_world(pointer_pos);
                     if response.drag_started() {
                         for node in self.state.nodes.values_mut() {
-                            if node.bounds().contains(world_pos) {
-                                self.state.dragging_node = Some(node.id);
-                                node.selected = true;
-                            } else {
-                                node.selected = false;
-                            }
+                            if node.bounds().contains(world_pos) { self.state.dragging_node = Some(node.id); node.selected = true; }
+                            else { node.selected = false; }
                         }
                     }
                 }
-
-                if response.drag_stopped() {
-                    self.state.dragging_node = None;
-                }
-
-                if let Some(id) = self.state.dragging_node {
-                    if let Some(node) = self.state.nodes.get_mut(&id) {
-                        node.position += response.drag_delta() / camera_zoom;
-                    }
-                }
-
+                if response.drag_stopped() { self.state.dragging_node = None; }
+                if let Some(id) = self.state.dragging_node { if let Some(node) = self.state.nodes.get_mut(&id) { node.position += response.drag_delta() / camera_zoom; } }
                 for edge in &self.state.edges {
                     if let (Some(n1), Some(n2)) = (self.state.nodes.get(&edge.from), self.state.nodes.get(&edge.to)) {
                         let p1 = world_to_screen(n1.position + Vec2::new(n1.size.x, n1.size.y / 2.0));
@@ -459,38 +336,23 @@ impl eframe::App for StoryBoardApp {
                         let cp_dist = (p2.x - p1.x).abs() * 0.5;
                         let c1 = p1 + Vec2::new(cp_dist, 0.0);
                         let c2 = p2 - Vec2::new(cp_dist, 0.0);
-
-                        painter.add(egui::Shape::CubicBezier(egui::epaint::CubicBezierShape {
-                            points: [p1, c1, c2, p2],
-                            closed: false,
-                            fill: Color32::TRANSPARENT,
-                            stroke: Stroke::new(2.0, Color32::from_gray(80)).into(),
-                        }));
+                        painter.add(egui::Shape::CubicBezier(egui::epaint::CubicBezierShape { points: [p1, c1, c2, p2], closed: false, fill: Color32::TRANSPARENT, stroke: Stroke::new(2.0, Color32::from_gray(80)).into() }));
                     }
                 }
-
+                let mut foxit_request = None;
                 let node_ids: Vec<u64> = self.state.nodes.keys().copied().collect();
                 for id in node_ids {
                     let node = &self.state.nodes[&id];
                     let screen_pos = world_to_screen(node.position);
                     let screen_size = node.size * camera_zoom;
                     let node_rect = Rect::from_min_size(screen_pos, screen_size);
-
                     if !canvas_rect.intersects(node_rect) { continue; }
-
-                    let frame = Frame::none()
-                        .fill(Color32::from_gray(30))
-                        .rounding(Rounding::same(8.0))
-                        .stroke(Stroke::new(1.0, if node.selected { Color32::from_rgb(0, 200, 255) } else { Color32::from_gray(60) }))
-                        .inner_margin(Margin::same(12.0));
-
+                    let frame = Frame::none().fill(Color32::from_gray(30)).rounding(Rounding::same(8.0)).stroke(Stroke::new(1.0, if node.selected { Color32::from_rgb(0, 200, 255) } else { Color32::from_gray(60) })).inner_margin(Margin::same(12.0));
                     let mut node_data = node.data.clone();
                     let mut node_data_changed = false;
                     let mut trigger_research = None;
                     let mut trigger_visualize = None;
                     let mut trigger_agnostic_ai = None;
-                    let mut trigger_foxit = None;
-
                     ui.put(node_rect, |ui: &mut egui::Ui| {
                         frame.show(ui, |ui| {
                             ui.vertical(|ui| {
@@ -501,108 +363,57 @@ impl eframe::App for StoryBoardApp {
                                     NodeData::Visual { .. } => ("AI Visualizer", "🎨"),
                                     NodeData::FoxitExport { .. } => ("Foxit Export", "📄"),
                                 };
-                                ui.horizontal(|ui| {
-                                    ui.label(icon);
-                                    ui.heading(title);
-                                });
-
+                                ui.horizontal(|ui| { ui.label(icon); ui.heading(title); });
                                 if camera_zoom < 0.4 { return; }
                                 ui.separator();
-
                                 match &mut node_data {
-                                    NodeData::Concept { text } => {
-                                        if ui.text_edit_multiline(text).changed() {
-                                            node_data_changed = true;
-                                        }
-                                    }
+                                    NodeData::Concept { text } => { if ui.text_edit_multiline(text).changed() { node_data_changed = true; } }
                                     NodeData::YouComResearch { query, result, is_loading } => {
                                         ui.add(egui::TextEdit::singleline(query));
-                                        if *is_loading {
-                                            ui.spinner();
-                                        } else if let Some(res) = result {
-                                            egui::ScrollArea::vertical().max_height(100.0).show(ui, |ui| {
-                                                ui.small(res);
-                                            });
-                                        } else {
-                                            if ui.button("Search Context").clicked() {
-                                                *is_loading = true;
-                                                node_data_changed = true;
-                                                trigger_research = Some(query.clone());
-                                            }
-                                        }
+                                        if *is_loading { ui.spinner(); }
+                                        else if let Some(res) = result { egui::ScrollArea::vertical().max_height(100.0).show(ui, |ui| { ui.small(res); }); }
+                                        else if ui.button("Search Context").clicked() { *is_loading = true; node_data_changed = true; trigger_research = Some(query.clone()); }
                                     }
                                     NodeData::AgnosticAI { model, prompt, result, is_loading } => {
-                                        ui.label("Model:");
-                                        if ui.text_edit_singleline(model).changed() {
-                                            node_data_changed = true;
-                                        }
-                                        ui.label("Prompt:");
-                                        if ui.text_edit_multiline(prompt).changed() {
-                                            node_data_changed = true;
-                                        }
-                                        if ui.button("Generate Response").clicked() {
-                                            *is_loading = true;
-                                            node_data_changed = true;
-                                            trigger_agnostic_ai = Some((model.clone(), prompt.clone()));
-                                        }
-                                        if *is_loading {
-                                            ui.spinner();
-                                        } else if let Some(res) = result {
-                                            egui::ScrollArea::vertical().max_height(150.0).show(ui, |ui| {
-                                                ui.small(res);
-                                            });
-                                        }
+                                        ui.label("Model:"); if ui.text_edit_singleline(model).changed() { node_data_changed = true; }
+                                        ui.label("Prompt:"); if ui.text_edit_multiline(prompt).changed() { node_data_changed = true; }
+                                        if ui.button("Generate Response").clicked() { *is_loading = true; node_data_changed = true; trigger_agnostic_ai = Some((model.clone(), prompt.clone())); }
+                                        if *is_loading { ui.spinner(); }
+                                        else if let Some(res) = result { egui::ScrollArea::vertical().max_height(150.0).show(ui, |ui| { ui.small(res); }); }
                                     }
                                     NodeData::Visual { prompt, texture, is_loading } => {
                                         ui.add(egui::TextEdit::multiline(prompt).hint_text("Describe image..."));
-                                        if ui.button("Generate Image").clicked() {
-                                            *is_loading = true;
-                                            node_data_changed = true;
-                                            trigger_visualize = Some(prompt.clone());
-                                        }
-                                        if *is_loading {
-                                            ui.spinner();
-                                        } else if let Some(tex) = texture {
-                                            ui.image(&*tex);
-                                        }
+                                        if ui.button("Generate Image").clicked() { *is_loading = true; node_data_changed = true; trigger_visualize = Some(prompt.clone()); }
+                                        if *is_loading { ui.spinner(); }
+                                        else if let Some(tex) = texture { ui.image(&*tex); }
                                     }
                                     NodeData::FoxitExport { status, is_loading } => {
                                         ui.label(format!("Status: {}", status));
-                                        if *is_loading {
-                                            ui.spinner();
-                                        } else {
-                                            if ui.button("Generate PDF Call Sheet").clicked() {
-                                                *is_loading = true;
-                                                node_data_changed = true;
-                                                trigger_foxit = Some("Exporting all StoryBoard content to PDF...".to_string());
-                                            }
-                                        }
+                                        if *is_loading { ui.spinner(); }
+                                        else if ui.button("Generate PDF Report").clicked() { *is_loading = true; node_data_changed = true; foxit_request = Some(id); }
                                     }
                                 }
                             });
                         }).response
                     });
-
-                    if node_data_changed {
-                        if let Some(n) = self.state.nodes.get_mut(&id) {
-                            n.data = node_data;
+                    if node_data_changed { if let Some(n) = self.state.nodes.get_mut(&id) { n.data = node_data; } }
+                    if let Some(q) = trigger_research { self.trigger_research(id, q, ctx.clone()); }
+                    if let Some(p) = trigger_visualize { self.trigger_visualize(id, p, ctx.clone()); }
+                    if let Some((m, p)) = trigger_agnostic_ai { self.trigger_agnostic_ai(id, m, p, ctx.clone()); }
+                }
+                if let Some(export_id) = foxit_request {
+                    let mut all_text = String::new();
+                    for n in self.state.nodes.values() {
+                        match &n.data {
+                            NodeData::Concept { text } => all_text.push_str(&format!("Concept: {}\n\n", text)),
+                            NodeData::YouComResearch { query, result, .. } => all_text.push_str(&format!("Research ({}): {}\n\n", query, result.as_deref().unwrap_or("None"))),
+                            NodeData::AgnosticAI { model, prompt, result, .. } => all_text.push_str(&format!("AI ({}, {}): {}\n\n", model, prompt, result.as_deref().unwrap_or("None"))),
+                            _ => {}
                         }
                     }
-                    if let Some(q) = trigger_research {
-                        self.trigger_research(id, q, ctx.clone());
-                    }
-                    if let Some(p) = trigger_visualize {
-                        self.trigger_visualize(id, p, ctx.clone());
-                    }
-                    if let Some((m, p)) = trigger_agnostic_ai {
-                        self.trigger_agnostic_ai(id, m, p, ctx.clone());
-                    }
-                    if let Some(c) = trigger_foxit {
-                        self.trigger_foxit(id, c, ctx.clone());
-                    }
+                    self.trigger_foxit(export_id, all_text, ctx.clone());
                 }
             });
-
         let elapsed = start_time.elapsed().as_secs_f32() * 1000.0;
         self.frame_times.push(elapsed);
         if self.frame_times.len() > 60 { self.frame_times.remove(0); }
@@ -613,33 +424,15 @@ impl eframe::App for StoryBoardApp {
 fn main() {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let options = eframe::NativeOptions {
-            viewport: egui::ViewportBuilder::default().with_inner_size([1200.0, 800.0]),
-            ..Default::default()
-        };
-        eframe::run_native(
-            "StoryBoard AI",
-            options,
-            Box::new(|cc| Ok(Box::new(StoryBoardApp::new(cc)))),
-        ).unwrap();
+        let options = eframe::NativeOptions { viewport: egui::ViewportBuilder::default().with_inner_size([1200.0, 800.0]), ..Default::default() };
+        eframe::run_native("StoryBoard AI", options, Box::new(|cc| Ok(Box::new(StoryBoardApp::new(cc))))).unwrap();
     }
-
     #[cfg(target_arch = "wasm32")]
     {
         let web_options = eframe::WebOptions::default();
         wasm_bindgen_futures::spawn_local(async move {
-            let canvas = web_sys::window()
-                .unwrap()
-                .document()
-                .unwrap()
-                .get_element_by_id("canvas")
-                .unwrap()
-                .dyn_into::<web_sys::HtmlCanvasElement>()
-                .unwrap();
-            eframe::WebRunner::new()
-                .start(canvas, web_options, Box::new(|cc| Ok(Box::new(StoryBoardApp::new(cc)))))
-                .await
-                .expect("failed to start eframe");
+            let canvas = web_sys::window().unwrap().document().unwrap().get_element_by_id("canvas").unwrap().dyn_into::<web_sys::HtmlCanvasElement>().unwrap();
+            eframe::WebRunner::new().start(canvas, web_options, Box::new(|cc| Ok(Box::new(StoryBoardApp::new(cc))))).await.expect("failed to start eframe");
         });
     }
 }

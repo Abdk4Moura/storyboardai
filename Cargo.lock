@@ -316,6 +316,7 @@ name = "canvas-rust-egui"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "base64 0.22.1",
  "dotenv",
  "eframe",
  "egui_extras",
@@ -2389,6 +2390,7 @@ dependencies = [
  "bytes",
  "encoding_rs",
  "futures-core",
+ "futures-util",
  "h2",
  "http",
  "http-body",
@@ -2400,6 +2402,7 @@ dependencies = [
  "js-sys",
  "log",
  "mime",
+ "mime_guess",
  "native-tls",
  "percent-encoding",
  "pin-project-lite",
