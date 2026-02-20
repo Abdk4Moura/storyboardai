@@ -1,1 +1,6 @@
 /target
+.env
+dist/
+server.log
+*.log
+.DS_Store
