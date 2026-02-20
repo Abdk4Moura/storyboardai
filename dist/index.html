@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Canvas Rust egui</title>
+    <style>
+      html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; }
+      #canvas { width: 100%; height: 100%; }
+    </style>
+  <link rel="modulepreload" href="/canvas-rust-egui-8e15cca0fd797a7e.js" crossorigin="anonymous" integrity="sha384-k1Pib9GLvmOtW/5ZTRSbA40f0FqEh+KuUzZ5uKYQspqY3KepsGOUvDap8ZBhLXDt"><link rel="preload" href="/canvas-rust-egui-8e15cca0fd797a7e_bg.wasm" crossorigin="anonymous" integrity="sha384-Y7FZ1OAknos3Qp5UZPa34dh0AEppK0am8/r5T8SNQc2dJZ5aWqCFDLF+dv8aX/qY" as="fetch" type="application/wasm"></head>
+  <body>
+    <canvas id="canvas"></canvas>
+  
+<script type="module">
+import init, * as bindings from '/canvas-rust-egui-8e15cca0fd797a7e.js';
+const wasm = await init({ module_or_path: '/canvas-rust-egui-8e15cca0fd797a7e_bg.wasm' });
+
+
+window.wasmBindings = bindings;
+
+
+dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
+
+</script></body>
+</html>
