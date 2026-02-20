@@ -204,12 +204,12 @@ impl StoryBoardApp {
 
     fn trigger_visualize(&self, node_id: u64, prompt: String, ctx: egui::Context) {
         let tx = self.http_tx.clone();
-        let url = format!(
-            "https://image.pollinations.ai/prompt/{}?width=512&height=300&nologo=true",
-            urlencoding::encode(&prompt)
-        );
+        let body = serde_json::json!({"prompt": prompt});
+        let body_bytes = serde_json::to_vec(&body).unwrap_or_default();
+        let mut request = ehttp::Request::post("/api/visualize", body_bytes);
+        request.headers.insert("Content-Type", "application/json");
         
-        ehttp::fetch(ehttp::Request::get(&url), move |result| {
+        ehttp::fetch(request, move |result| {
             match result {
                 Ok(response) => {
                     let _ = tx.send(AppMessage::ImageResponse(node_id, response.bytes));

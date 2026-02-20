@@ -2,10 +2,11 @@
 mod inner {
     use axum::{
         extract::Json,
-        http::{Method, StatusCode},
+        http::{Method, StatusCode, header},
         response::{IntoResponse, Response},
         routing::post,
         Router,
+        body::Body,
     };
     use serde::{Deserialize, Serialize};
     use std::{env, net::SocketAddr};
@@ -35,12 +36,12 @@ mod inner {
 
         let app = Router::new()
             .route("/api/research", post(proxy_you_com))
-            .route("/api/visualize", post(proxy_perfect_corp))
+            .route("/api/visualize", post(proxy_visualize))
             .route("/api/foxit", post(proxy_foxit))
             .fallback_service(ServeDir::new("dist"))
             .layer(cors);
 
-        let port = env::var("PORT").unwrap_or_else(|_| "8080".to_string());
+        let port = env::var("PORT").unwrap_or_else(|_| "8033".to_string());
         let addr: SocketAddr = format!("0.0.0.0:{}", port).parse().expect("Invalid address");
 
         println!("🚀 StoryBoard AI Server running on http://{}", addr);
@@ -71,8 +72,6 @@ mod inner {
             }
         }
 
-        // MOCK for Hackathon if API fails or key missing
-        println!("Using MOCK for Research: {}", payload.query);
         let mock_response = serde_json::json!({
             "hits": [
                 {
@@ -85,44 +84,43 @@ mod inner {
         Json(mock_response).into_response()
     }
 
-    async fn proxy_perfect_corp(Json(payload): Json<VisualizeRequest>) -> Response {
-        let api_key = env::var("PERFECT_CORP_API_KEY").ok();
+    async fn proxy_visualize(Json(payload): Json<VisualizeRequest>) -> Response {
+        let prompt_encoded = urlencoding::encode(&payload.prompt);
+        let url = format!("https://image.pollinations.ai/prompt/{}?width=512&height=300&nologo=true", prompt_encoded);
         
-        if let Some(key) = api_key {
-            if !key.contains("your_key_here") && !key.is_empty() {
-                let client = reqwest::Client::new();
-                let resp = client
-                    .post("https://yce-api-01.perfectcorp.com/v1/image/generate")
-                    .header("Authorization", format!("Bearer {}", key))
-                    .header("X-API-KEY", key)
-                    .json(&serde_json::json!({
-                        "text": payload.prompt,
-                        "style": "cinematic"
-                    }))
-                    .send()
-                    .await;
+        let client = reqwest::Client::new();
+        let resp = client.get(&url).send().await;
 
-                if let Ok(res) = resp {
-                    let status = res.status();
-                    let body = res.text().await.unwrap_or_default();
-                    if status.is_success() {
-                        return (status, body).into_response();
-                    }
+        match resp {
+            Ok(res) => {
+                let status = res.status();
+                if status.is_success() {
+                    let bytes = res.bytes().await.unwrap_or_default();
+                    return Response::builder()
+                        .header(header::CONTENT_TYPE, "image/jpeg")
+                        .body(Body::from(bytes))
+                        .unwrap();
                 }
+                (status, "Pollinations API error").into_response()
+            }
+            Err(e) => {
+                println!("Pollinations error: {}, using placeholder", e);
+                let placeholder_url = format!("https://picsum.photos/seed/{}/512/300", prompt_encoded);
+                let res = client.get(&placeholder_url).send().await;
+                if let Ok(r) = res {
+                    let bytes = r.bytes().await.unwrap_or_default();
+                    return Response::builder()
+                        .header(header::CONTENT_TYPE, "image/jpeg")
+                        .body(Body::from(bytes))
+                        .unwrap();
+                }
+                (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
             }
         }
-
-        // MOCK for Hackathon
-        println!("Using MOCK for Visualization: {}", payload.prompt);
-        let mock_json = serde_json::json!({
-            "status": "success",
-            "image_url": format!("https://picsum.photos/seed/{}/800/600", urlencoding::encode(&payload.prompt))
-        });
-        Json(mock_json).into_response()
     }
 
     async fn proxy_foxit() -> Response {
-        (StatusCode::OK, "Foxit PDF Generated and Exported to Call Sheet").into_response()
+        (StatusCode::OK, "Foxit PDF Generated").into_response()
     }
 }
 
