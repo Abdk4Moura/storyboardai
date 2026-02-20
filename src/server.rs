@@ -63,6 +63,7 @@ mod inner {
 
     async fn proxy_you_com(Json(payload): Json<ResearchRequest>) -> Response {
         let api_key = env::var("YOU_COM_API_KEY").ok();
+        
         if let Some(key) = api_key {
             if !key.contains("your_key_here") && !key.is_empty() {
                 let client = reqwest::Client::new();
@@ -82,11 +83,13 @@ mod inner {
                 }
             }
         }
+
+        // MOCK for Hackathon
         let mock_response = serde_json::json!({
             "hits": [
                 {
                     "title": format!("Research Results for {}", payload.query),
-                    "description": "Mock research data for DeveloperWeek hackathon.",
+                    "description": "This is a high-performance mock result for the DeveloperWeek hackathon. In a production environment, this would contain real-time search data from You.com.",
                     "url": "https://you.com"
                 }
             ]

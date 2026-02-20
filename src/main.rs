@@ -117,6 +117,7 @@ pub struct CanvasState {
     pub camera_offset: Vec2,
     pub camera_zoom: f32,
     pub dragging_node: Option<u64>,
+    pub linking_from: Option<u64>,
 }
 
 impl Default for CanvasState {
@@ -128,6 +129,7 @@ impl Default for CanvasState {
             camera_offset: Vec2::ZERO,
             camera_zoom: 1.0,
             dragging_node: None,
+            linking_from: None,
         }
     }
 }
@@ -258,6 +260,97 @@ impl StoryBoardApp {
 impl eframe::App for StoryBoardApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let start_time = Instant::now();
+
+        // --- SIDEBAR ---
+        egui::SidePanel::left("sidebar")
+            .resizable(true)
+            .default_width(220.0)
+            .show(ctx, |ui| {
+                ui.vertical(|ui| {
+                    ui.add_space(10.0);
+                    ui.heading("🎬 StoryBoard AI");
+                    ui.separator();
+
+                    ui.label("Add New Node:");
+                    ui.horizontal_wrapped(|ui| {
+                        if ui.button("🧠 Concept").clicked() {
+                            let pos = Pos2::new(self.state.camera_offset.x, self.state.camera_offset.y);
+                            self.add_node(pos, NodeData::Concept { text: "New Idea".to_string() });
+                        }
+                        if ui.button("🌐 Research").clicked() {
+                            let pos = Pos2::new(self.state.camera_offset.x, self.state.camera_offset.y);
+                            self.add_node(pos, NodeData::YouComResearch { query: "Topic".to_string(), result: None, is_loading: false });
+                        }
+                        if ui.button("🤖 Agnostic AI").clicked() {
+                            let pos = Pos2::new(self.state.camera_offset.x, self.state.camera_offset.y);
+                            self.add_node(pos, NodeData::AgnosticAI { model: "google/gemini-flash-1.5".to_string(), prompt: "Prompt".to_string(), result: None, is_loading: false });
+                        }
+                        if ui.button("🎨 Visual").clicked() {
+                            let pos = Pos2::new(self.state.camera_offset.x, self.state.camera_offset.y);
+                            self.add_node(pos, NodeData::Visual { prompt: "Scene".to_string(), texture: None, is_loading: false });
+                        }
+                    });
+
+                    ui.add_space(10.0);
+                    ui.separator();
+                    ui.label("Active Nodes:");
+                    
+                    let mut to_delete = None;
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        let ids: Vec<u64> = self.state.nodes.keys().copied().collect();
+                        for id in ids {
+                            ui.horizontal(|ui| {
+                                let node = &self.state.nodes[&id];
+                                let icon = match &node.data {
+                                    NodeData::Concept { .. } => "🧠",
+                                    NodeData::YouComResearch { .. } => "🌐",
+                                    NodeData::AgnosticAI { .. } => "🤖",
+                                    NodeData::Visual { .. } => "🎨",
+                                    NodeData::FoxitExport { .. } => "📄",
+                                };
+                                if ui.selectable_label(node.selected, format!("{} Node {}", icon, id)).clicked() {
+                                    self.state.camera_offset = node.position.to_vec2();
+                                }
+                                if ui.button("🗑").clicked() {
+                                    to_delete = Some(id);
+                                }
+                            });
+                        }
+                    });
+
+                    if let Some(id) = to_delete {
+                        self.state.nodes.remove(&id);
+                        self.state.edges.retain(|e| e.from != id && e.to != id);
+                    }
+
+                    ui.separator();
+                    ui.label("Pipeline:");
+                    if self.state.linking_from.is_some() {
+                        if ui.button("🚫 Cancel Linking").clicked() {
+                            self.state.linking_from = None;
+                        }
+                        ui.label("Click another node to connect...");
+                    } else {
+                        if ui.button("🔗 Create Link").clicked() {
+                            if let Some(&id) = self.state.nodes.iter().find(|(_, n)| n.selected).map(|(id, _)| id) {
+                                self.state.linking_from = Some(id);
+                            }
+                        }
+                    }
+
+                    ui.add_space(10.0);
+                    ui.separator();
+                    if ui.button("🗑 Clear Canvas").clicked() {
+                        self.state.nodes.clear();
+                        self.state.edges.clear();
+                    }
+                    
+                    ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
+                        ui.label(format!("FPS: {:.0}", 1000.0 / (self.frame_times.iter().sum::<f32>() / self.frame_times.len().max(1) as f32)));
+                    });
+                });
+            });
+
         while let Ok(msg) = self.http_rx.try_recv() {
             match msg {
                 AppMessage::TextResponse(id, text) => {
@@ -296,7 +389,9 @@ impl eframe::App for StoryBoardApp {
                 }
             }
         }
+        
         self.apply_physics();
+        
         egui::CentralPanel::default()
             .frame(egui::Frame::none().fill(Color32::from_rgb(15, 15, 15)))
             .show(ctx, |ui| {
@@ -304,8 +399,10 @@ impl eframe::App for StoryBoardApp {
                 let (response, painter) = ui.allocate_painter(canvas_rect.size(), Sense::click_and_drag());
                 let camera_offset = self.state.camera_offset;
                 let camera_zoom = self.state.camera_zoom;
+                
                 let world_to_screen = |pos: Pos2| { let center = canvas_rect.center(); let rel = (pos.to_vec2() - camera_offset) * camera_zoom; center + rel };
                 let screen_to_world = |pos: Pos2| { let center = canvas_rect.center(); let rel = (pos - center) / camera_zoom; Pos2::new(rel.x + camera_offset.x, rel.y + camera_offset.y) };
+                
                 if response.dragged() && self.state.dragging_node.is_none() { self.state.camera_offset -= response.drag_delta() / camera_zoom; }
                 let scroll_delta = ctx.input(|i| i.raw_scroll_delta.y);
                 if scroll_delta != 0.0 {
@@ -318,17 +415,31 @@ impl eframe::App for StoryBoardApp {
                         self.state.camera_offset = world_pos_before.to_vec2() - (pointer_pos - center) / self.state.camera_zoom;
                     }
                 }
+                
                 if let Some(pointer_pos) = ctx.input(|i| i.pointer.interact_pos()) {
                     let world_pos = screen_to_world(pointer_pos);
                     if response.drag_started() {
+                        let mut clicked_id = None;
                         for node in self.state.nodes.values_mut() {
-                            if node.bounds().contains(world_pos) { self.state.dragging_node = Some(node.id); node.selected = true; }
-                            else { node.selected = false; }
+                            if node.bounds().contains(world_pos) {
+                                clicked_id = Some(node.id);
+                                self.state.dragging_node = Some(node.id);
+                                node.selected = true;
+                            } else { node.selected = false; }
+                        }
+                        if let (Some(from_id), Some(to_id)) = (self.state.linking_from, clicked_id) {
+                            if from_id != to_id {
+                                self.state.edges.push(Edge { id: self.state.next_id, from: from_id, to: to_id });
+                                self.state.next_id += 1;
+                            }
+                            self.state.linking_from = None;
                         }
                     }
                 }
+                
                 if response.drag_stopped() { self.state.dragging_node = None; }
                 if let Some(id) = self.state.dragging_node { if let Some(node) = self.state.nodes.get_mut(&id) { node.position += response.drag_delta() / camera_zoom; } }
+                
                 for edge in &self.state.edges {
                     if let (Some(n1), Some(n2)) = (self.state.nodes.get(&edge.from), self.state.nodes.get(&edge.to)) {
                         let p1 = world_to_screen(n1.position + Vec2::new(n1.size.x, n1.size.y / 2.0));
@@ -339,6 +450,7 @@ impl eframe::App for StoryBoardApp {
                         painter.add(egui::Shape::CubicBezier(egui::epaint::CubicBezierShape { points: [p1, c1, c2, p2], closed: false, fill: Color32::TRANSPARENT, stroke: Stroke::new(2.0, Color32::from_gray(80)).into() }));
                     }
                 }
+                
                 let mut foxit_request = None;
                 let node_ids: Vec<u64> = self.state.nodes.keys().copied().collect();
                 for id in node_ids {
@@ -353,6 +465,7 @@ impl eframe::App for StoryBoardApp {
                     let mut trigger_research = None;
                     let mut trigger_visualize = None;
                     let mut trigger_agnostic_ai = None;
+                    
                     ui.put(node_rect, |ui: &mut egui::Ui| {
                         frame.show(ui, |ui| {
                             ui.vertical(|ui| {
@@ -372,18 +485,67 @@ impl eframe::App for StoryBoardApp {
                                         ui.add(egui::TextEdit::singleline(query));
                                         if *is_loading { ui.spinner(); }
                                         else if let Some(res) = result { egui::ScrollArea::vertical().max_height(100.0).show(ui, |ui| { ui.small(res); }); }
-                                        else if ui.button("Search Context").clicked() { *is_loading = true; node_data_changed = true; trigger_research = Some(query.clone()); }
+                                        else {
+                                            ui.horizontal(|ui| {
+                                                if ui.button("🌐 Search").clicked() { *is_loading = true; node_data_changed = true; trigger_research = Some(query.clone()); }
+                                                if ui.button("🔗 Link Parent").clicked() {
+                                                    let mut parent_text = None;
+                                                    for edge in &self.state.edges {
+                                                        if edge.to == id {
+                                                            if let Some(parent) = self.state.nodes.get(&edge.from) {
+                                                                if let NodeData::Concept { text } = &parent.data { parent_text = Some(text.clone()); break; }
+                                                            }
+                                                        }
+                                                    }
+                                                    if let Some(txt) = parent_text { *query = txt; node_data_changed = true; }
+                                                }
+                                            });
+                                        }
                                     }
                                     NodeData::AgnosticAI { model, prompt, result, is_loading } => {
                                         ui.label("Model:"); if ui.text_edit_singleline(model).changed() { node_data_changed = true; }
                                         ui.label("Prompt:"); if ui.text_edit_multiline(prompt).changed() { node_data_changed = true; }
-                                        if ui.button("Generate Response").clicked() { *is_loading = true; node_data_changed = true; trigger_agnostic_ai = Some((model.clone(), prompt.clone())); }
+                                        ui.horizontal(|ui| {
+                                            if ui.button("🤖 Generate").clicked() { *is_loading = true; node_data_changed = true; trigger_agnostic_ai = Some((model.clone(), prompt.clone())); }
+                                            if ui.button("🔗 Link Parent").clicked() {
+                                                let mut parent_text = None;
+                                                for edge in &self.state.edges {
+                                                    if edge.to == id {
+                                                        if let Some(parent) = self.state.nodes.get(&edge.from) {
+                                                            match &parent.data {
+                                                                NodeData::YouComResearch { result: Some(res), .. } => parent_text = Some(res.clone()),
+                                                                NodeData::Concept { text } => parent_text = Some(text.clone()),
+                                                                _ => {}
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                if let Some(txt) = parent_text { *prompt = txt; node_data_changed = true; }
+                                            }
+                                        });
                                         if *is_loading { ui.spinner(); }
                                         else if let Some(res) = result { egui::ScrollArea::vertical().max_height(150.0).show(ui, |ui| { ui.small(res); }); }
                                     }
                                     NodeData::Visual { prompt, texture, is_loading } => {
                                         ui.add(egui::TextEdit::multiline(prompt).hint_text("Describe image..."));
-                                        if ui.button("Generate Image").clicked() { *is_loading = true; node_data_changed = true; trigger_visualize = Some(prompt.clone()); }
+                                        ui.horizontal(|ui| {
+                                            if ui.button("🎨 Generate").clicked() { *is_loading = true; node_data_changed = true; trigger_visualize = Some(prompt.clone()); }
+                                            if ui.button("🔗 Link Parent").clicked() {
+                                                let mut parent_text = None;
+                                                for edge in &self.state.edges {
+                                                    if edge.to == id {
+                                                        if let Some(parent) = self.state.nodes.get(&edge.from) {
+                                                            match &parent.data {
+                                                                NodeData::AgnosticAI { result: Some(res), .. } => parent_text = Some(res.clone()),
+                                                                NodeData::YouComResearch { result: Some(res), .. } => parent_text = Some(res.clone()),
+                                                                _ => {}
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                if let Some(txt) = parent_text { *prompt = txt; node_data_changed = true; }
+                                            }
+                                        });
                                         if *is_loading { ui.spinner(); }
                                         else if let Some(tex) = texture { ui.image(&*tex); }
                                     }
