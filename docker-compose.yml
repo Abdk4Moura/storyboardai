@@ -1,0 +1,11 @@
+version: '3.8'
+services:
+  storyboard-ai:
+    build: .
+    ports:
+      - "8033:8033"
+    environment:
+      - YOU_COM_API_KEY=${YOU_COM_API_KEY}
+      - PERFECT_CORP_API_KEY=${PERFECT_CORP_API_KEY}
+      - FOXIT_API_KEY=${FOXIT_API_KEY}
+      - PORT=8033

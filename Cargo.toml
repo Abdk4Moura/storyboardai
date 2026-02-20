@@ -23,12 +23,29 @@ web-time = "0.1"
 ehttp = "0.5"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+urlencoding = "2.1"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.2", features = ["js"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-image = "0.25"
+axum = { version = "0.7", features = ["macros"] }
+tokio = { version = "1.0", features = ["full"] }
+tower-http = { version = "0.5", features = ["fs", "cors", "trace"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+dotenv = "0.15"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+[[bin]]
+name = "server"
+path = "src/server.rs"
+required-features = []
+
+[[bin]]
+name = "canvas-rust-egui"
+path = "src/main.rs"
 
 [profile.release]
 opt-level = 3

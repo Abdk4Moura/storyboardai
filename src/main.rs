@@ -5,6 +5,7 @@ use egui::{
 };
 use std::collections::HashMap;
 use std::sync::mpsc;
+use std::fmt;
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
@@ -12,7 +13,7 @@ use std::time::Instant;
 #[cfg(target_arch = "wasm32")]
 use web_time::Instant;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
 pub enum NodeData {
     Concept {
         text: String,
@@ -22,14 +23,44 @@ pub enum NodeData {
         result: Option<String>,
         is_loading: bool,
     },
-    PerfectCorpImage {
+    Visual {
         prompt: String,
-        image_url: Option<String>,
+        #[serde(skip)]
+        texture: Option<egui::TextureHandle>,
         is_loading: bool,
     },
     FoxitExport {
         status: String,
     },
+}
+
+impl fmt::Debug for NodeData {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Concept { text } => f.debug_struct("Concept").field("text", text).finish(),
+            Self::YouComResearch { query, result, is_loading } => f.debug_struct("YouComResearch").field("query", query).field("result", result).field("is_loading", is_loading).finish(),
+            Self::Visual { prompt, is_loading, .. } => f.debug_struct("Visual").field("prompt", prompt).field("is_loading", is_loading).finish(),
+            Self::FoxitExport { status } => f.debug_struct("FoxitExport").field("status", status).finish(),
+        }
+    }
+}
+
+impl PartialEq for NodeData {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Concept { text: a }, Self::Concept { text: b }) => a == b,
+            (Self::YouComResearch { query: a, result: b, is_loading: c }, Self::YouComResearch { query: x, result: y, is_loading: z }) => a == x && b == y && c == z,
+            (Self::Visual { prompt: a, is_loading: b, .. }, Self::Visual { prompt: x, is_loading: y, .. }) => a == x && b == y,
+            (Self::FoxitExport { status: a }, Self::FoxitExport { status: b }) => a == b,
+            _ => false,
+        }
+    }
+}
+
+pub enum AppMessage {
+    TextResponse(u64, String),
+    ImageResponse(u64, Vec<u8>),
+    Error(u64, String),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -39,7 +70,7 @@ pub struct Node {
     pub size: Vec2,
     pub data: NodeData,
     pub selected: bool,
-    pub velocity: Vec2, // For physics
+    pub velocity: Vec2,
 }
 
 impl Node {
@@ -47,7 +78,7 @@ impl Node {
         Self {
             id,
             position,
-            size: Vec2::new(200.0, 150.0),
+            size: Vec2::new(250.0, 300.0),
             data,
             selected: false,
             velocity: Vec2::ZERO,
@@ -90,8 +121,8 @@ impl Default for CanvasState {
 
 pub struct StoryBoardApp {
     state: CanvasState,
-    http_rx: mpsc::Receiver<(u64, String)>,
-    http_tx: mpsc::Sender<(u64, String)>,
+    http_rx: mpsc::Receiver<AppMessage>,
+    http_tx: mpsc::Sender<AppMessage>,
     frame_times: Vec<f32>,
 }
 
@@ -110,13 +141,13 @@ impl StoryBoardApp {
 
     fn setup_demo_scene(&mut self) {
         let c1_id = self.add_node(
-            Pos2::new(-300.0, 0.0),
+            Pos2::new(-350.0, 0.0),
             NodeData::Concept {
                 text: "Cyberpunk Neo-Tokyo Chase".to_string(),
             },
         );
         let r1_id = self.add_node(
-            Pos2::new(0.0, -100.0),
+            Pos2::new(0.0, -150.0),
             NodeData::YouComResearch {
                 query: "Neo-Tokyo architecture references".to_string(),
                 result: None,
@@ -124,15 +155,15 @@ impl StoryBoardApp {
             },
         );
         let p1_id = self.add_node(
-            Pos2::new(300.0, 0.0),
-            NodeData::PerfectCorpImage {
+            Pos2::new(350.0, 0.0),
+            NodeData::Visual {
                 prompt: "Futuristic police car in rain, neon lights".to_string(),
-                image_url: None,
+                texture: None,
                 is_loading: false,
             },
         );
         let f1_id = self.add_node(
-            Pos2::new(0.0, 200.0),
+            Pos2::new(0.0, 250.0),
             NodeData::FoxitExport {
                 status: "Ready".to_string(),
             },
@@ -150,51 +181,77 @@ impl StoryBoardApp {
         id
     }
 
-    fn trigger_fetch(&self, node_id: u64, url: String, ctx: egui::Context) {
+    fn trigger_research(&self, node_id: u64, query: String, ctx: egui::Context) {
         let tx = self.http_tx.clone();
-        let request = ehttp::Request::get(url);
+        let body = serde_json::json!({"query": query});
+        let body_bytes = serde_json::to_vec(&body).unwrap_or_default();
+        let mut request = ehttp::Request::post("/api/research", body_bytes);
+        request.headers.insert("Content-Type", "application/json");
+        
         ehttp::fetch(request, move |result| {
-            if let Ok(response) = result {
-                let text = response.text().unwrap_or_default().to_string();
-                let _ = tx.send((node_id, text));
-                ctx.request_repaint();
+            match result {
+                Ok(response) => {
+                    let text = response.text().unwrap_or_default().to_string();
+                    let _ = tx.send(AppMessage::TextResponse(node_id, text));
+                }
+                Err(e) => {
+                    let _ = tx.send(AppMessage::Error(node_id, e));
+                }
             }
+            ctx.request_repaint();
+        });
+    }
+
+    fn trigger_visualize(&self, node_id: u64, prompt: String, ctx: egui::Context) {
+        let tx = self.http_tx.clone();
+        let url = format!(
+            "https://image.pollinations.ai/prompt/{}?width=512&height=300&nologo=true",
+            urlencoding::encode(&prompt)
+        );
+        
+        ehttp::fetch(ehttp::Request::get(&url), move |result| {
+            match result {
+                Ok(response) => {
+                    let _ = tx.send(AppMessage::ImageResponse(node_id, response.bytes));
+                }
+                Err(e) => {
+                    let _ = tx.send(AppMessage::Error(node_id, e));
+                }
+            }
+            ctx.request_repaint();
         });
     }
 
     fn apply_physics(&mut self) {
-        let repulsion = 5000.0;
+        let repulsion = 6000.0;
         let attraction = 0.02;
         let damping = 0.8;
 
         let node_ids: Vec<u64> = self.state.nodes.keys().copied().collect();
         let mut forces: HashMap<u64, Vec2> = node_ids.iter().map(|&id| (id, Vec2::ZERO)).collect();
 
-        // Repulsion
         for &i in &node_ids {
             for &j in &node_ids {
                 if i == j { continue; }
                 let pos_i = self.state.nodes[&i].position;
                 let pos_j = self.state.nodes[&j].position;
                 let delta = pos_i - pos_j;
-                let dist = delta.length().max(50.0);
+                let dist = delta.length().max(100.0);
                 let force = delta.normalized() * (repulsion / (dist * dist));
                 *forces.get_mut(&i).unwrap() += force;
             }
         }
 
-        // Attraction
         for edge in &self.state.edges {
             if let (Some(n1), Some(n2)) = (self.state.nodes.get(&edge.from), self.state.nodes.get(&edge.to)) {
                 let delta = n2.position - n1.position;
                 let dist = delta.length();
-                let force = delta.normalized() * (dist - 300.0) * attraction;
+                let force = delta.normalized() * (dist - 400.0) * attraction;
                 *forces.get_mut(&edge.from).unwrap() += force;
                 *forces.get_mut(&edge.to).unwrap() -= force;
             }
         }
 
-        // Apply
         for id in node_ids {
             if let Some(node) = self.state.nodes.get_mut(&id) {
                 if self.state.dragging_node == Some(id) { continue; }
@@ -209,19 +266,46 @@ impl eframe::App for StoryBoardApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let start_time = Instant::now();
 
-        // Handle Async HTTP Responses
-        while let Ok((id, result)) = self.http_rx.try_recv() {
-            if let Some(node) = self.state.nodes.get_mut(&id) {
-                match &mut node.data {
-                    NodeData::YouComResearch { result: r, is_loading, .. } => {
-                        *r = Some(result);
-                        *is_loading = false;
+        while let Ok(msg) = self.http_rx.try_recv() {
+            match msg {
+                AppMessage::TextResponse(id, text) => {
+                    if let Some(node) = self.state.nodes.get_mut(&id) {
+                        if let NodeData::YouComResearch { result: r, is_loading, .. } = &mut node.data {
+                            *r = Some(text);
+                            *is_loading = false;
+                        }
                     }
-                    NodeData::PerfectCorpImage { image_url, is_loading, .. } => {
-                        *image_url = Some("https://picsum.photos/400/300".to_string());
-                        *is_loading = false;
+                }
+                AppMessage::ImageResponse(id, bytes) => {
+                    if let Some(node) = self.state.nodes.get_mut(&id) {
+                        if let NodeData::Visual { texture, is_loading, .. } = &mut node.data {
+                            *is_loading = false;
+                            
+                            if let Ok(image) = image::load_from_memory(&bytes) {
+                                let size = [image.width() as usize, image.height() as usize];
+                                let image_buffer = image.to_rgba8();
+                                let color_image = egui::ColorImage::from_rgba_unmultiplied(
+                                    size,
+                                    image_buffer.as_raw(),
+                                );
+                                
+                                *texture = Some(ctx.load_texture(
+                                    format!("node-image-{}", id),
+                                    color_image,
+                                    egui::TextureOptions::LINEAR
+                                ));
+                            }
+                        }
                     }
-                    _ => {}
+                }
+                AppMessage::Error(id, _err) => {
+                    if let Some(node) = self.state.nodes.get_mut(&id) {
+                        match &mut node.data {
+                            NodeData::YouComResearch { is_loading, .. } => *is_loading = false,
+                            NodeData::Visual { is_loading, .. } => *is_loading = false,
+                            _ => {}
+                        }
+                    }
                 }
             }
         }
@@ -249,12 +333,10 @@ impl eframe::App for StoryBoardApp {
                     Pos2::new(rel.x + camera_offset.x, rel.y + camera_offset.y)
                 };
 
-                // Input handling: Camera Panning
                 if response.dragged() && self.state.dragging_node.is_none() {
                     self.state.camera_offset -= response.drag_delta() / camera_zoom;
                 }
 
-                // Input handling: Zoom-to-Cursor
                 let scroll_delta = ctx.input(|i| i.raw_scroll_delta.y);
                 if scroll_delta != 0.0 {
                     if let Some(pointer_pos) = ctx.input(|i| i.pointer.hover_pos()) {
@@ -291,12 +373,10 @@ impl eframe::App for StoryBoardApp {
                     }
                 }
 
-                // Draw Edges (Bezier)
                 for edge in &self.state.edges {
                     if let (Some(n1), Some(n2)) = (self.state.nodes.get(&edge.from), self.state.nodes.get(&edge.to)) {
                         let p1 = world_to_screen(n1.position + Vec2::new(n1.size.x, n1.size.y / 2.0));
                         let p2 = world_to_screen(n2.position + Vec2::new(0.0, n2.size.y / 2.0));
-                        
                         let cp_dist = (p2.x - p1.x).abs() * 0.5;
                         let c1 = p1 + Vec2::new(cp_dist, 0.0);
                         let c2 = p2 - Vec2::new(cp_dist, 0.0);
@@ -310,7 +390,6 @@ impl eframe::App for StoryBoardApp {
                     }
                 }
 
-                // Draw Nodes
                 let node_ids: Vec<u64> = self.state.nodes.keys().copied().collect();
                 for id in node_ids {
                     let node = &self.state.nodes[&id];
@@ -318,10 +397,7 @@ impl eframe::App for StoryBoardApp {
                     let screen_size = node.size * camera_zoom;
                     let node_rect = Rect::from_min_size(screen_pos, screen_size);
 
-                    // Frustum Culling
-                    if !canvas_rect.intersects(node_rect) {
-                        continue;
-                    }
+                    if !canvas_rect.intersects(node_rect) { continue; }
 
                     let frame = Frame::none()
                         .fill(Color32::from_gray(30))
@@ -331,17 +407,16 @@ impl eframe::App for StoryBoardApp {
 
                     let mut node_data = node.data.clone();
                     let mut node_data_changed = false;
-                    let mut trigger_fetch_id = None;
-                    let mut trigger_fetch_url = None;
+                    let mut trigger_research = None;
+                    let mut trigger_visualize = None;
 
                     ui.put(node_rect, |ui: &mut egui::Ui| {
                         frame.show(ui, |ui| {
                             ui.vertical(|ui| {
-                                // Header
                                 let (title, icon) = match &node_data {
                                     NodeData::Concept { .. } => ("Concept", "🧠"),
                                     NodeData::YouComResearch { .. } => ("You.com Research", "🌐"),
-                                    NodeData::PerfectCorpImage { .. } => ("Perfect Corp Visual", "🎨"),
+                                    NodeData::Visual { .. } => ("AI Visualizer", "🎨"),
                                     NodeData::FoxitExport { .. } => ("Foxit Export", "📄"),
                                 };
                                 ui.horizontal(|ui| {
@@ -349,14 +424,9 @@ impl eframe::App for StoryBoardApp {
                                     ui.heading(title);
                                 });
 
-                                // Level of Detail (LOD) check
-                                if camera_zoom < 0.4 {
-                                    return;
-                                }
-
+                                if camera_zoom < 0.4 { return; }
                                 ui.separator();
 
-                                // Content
                                 match &mut node_data {
                                     NodeData::Concept { text } => {
                                         if ui.text_edit_multiline(text).changed() {
@@ -364,7 +434,7 @@ impl eframe::App for StoryBoardApp {
                                         }
                                     }
                                     NodeData::YouComResearch { query, result, is_loading } => {
-                                        ui.label(format!("Query: {}", query));
+                                        ui.add(egui::TextEdit::singleline(query));
                                         if *is_loading {
                                             ui.spinner();
                                         } else if let Some(res) = result {
@@ -373,34 +443,26 @@ impl eframe::App for StoryBoardApp {
                                             if ui.button("Search Context").clicked() {
                                                 *is_loading = true;
                                                 node_data_changed = true;
-                                                trigger_fetch_id = Some(id);
-                                                trigger_fetch_url = Some(format!("https://api.ydc-index.io/search?query={}", query));
+                                                trigger_research = Some(query.clone());
                                             }
                                         }
                                     }
-                                    NodeData::PerfectCorpImage { prompt, image_url, is_loading } => {
-                                        ui.label(format!("Prompt: {}", prompt));
+                                    NodeData::Visual { prompt, texture, is_loading } => {
+                                        ui.add(egui::TextEdit::multiline(prompt).hint_text("Describe image..."));
+                                        if ui.button("Generate Image").clicked() {
+                                            *is_loading = true;
+                                            node_data_changed = true;
+                                            trigger_visualize = Some(prompt.clone());
+                                        }
                                         if *is_loading {
                                             ui.spinner();
-                                        } else if let Some(url) = image_url {
-                                            ui.label("Image Generated!");
-                                            ui.small(url);
-                                            ui.painter().rect_stroke(ui.available_rect_before_wrap(), 4.0, Stroke::new(1.0, Color32::GRAY));
-                                        } else {
-                                            if ui.button("Generate Storyboard Image").clicked() {
-                                                *is_loading = true;
-                                                node_data_changed = true;
-                                                trigger_fetch_id = Some(id);
-                                                trigger_fetch_url = Some("https://api.perfectcorp.com/v1/generate".to_string());
-                                            }
+                                        } else if let Some(tex) = texture {
+                                            ui.image(& *tex);
                                         }
                                     }
                                     NodeData::FoxitExport { status } => {
                                         ui.label(format!("Status: {}", status));
-                                        ui.add_space(10.0);
-                                        if ui.button("Generate PDF Call Sheet").clicked() {
-                                            // Trigger Foxit logic
-                                        }
+                                        if ui.button("Generate PDF Call Sheet").clicked() {}
                                     }
                                 }
                             });
@@ -412,8 +474,11 @@ impl eframe::App for StoryBoardApp {
                             n.data = node_data;
                         }
                     }
-                    if let (Some(f_id), Some(f_url)) = (trigger_fetch_id, trigger_fetch_url) {
-                        self.trigger_fetch(f_id, f_url, ctx.clone());
+                    if let Some(q) = trigger_research {
+                        self.trigger_research(id, q, ctx.clone());
+                    }
+                    if let Some(p) = trigger_visualize {
+                        self.trigger_visualize(id, p, ctx.clone());
                     }
                 }
             });
@@ -421,7 +486,6 @@ impl eframe::App for StoryBoardApp {
         let elapsed = start_time.elapsed().as_secs_f32() * 1000.0;
         self.frame_times.push(elapsed);
         if self.frame_times.len() > 60 { self.frame_times.remove(0); }
-        
         ctx.request_repaint();
     }
 }
