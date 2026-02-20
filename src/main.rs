@@ -23,9 +23,10 @@ pub enum NodeData {
         result: Option<String>,
         is_loading: bool,
     },
-    GeminiDirector {
+    AgnosticAI {
+        model: String,
         prompt: String,
-        script: Option<String>,
+        result: Option<String>,
         is_loading: bool,
     },
     Visual {
@@ -36,6 +37,7 @@ pub enum NodeData {
     },
     FoxitExport {
         status: String,
+        is_loading: bool,
     },
 }
 
@@ -44,9 +46,9 @@ impl fmt::Debug for NodeData {
         match self {
             Self::Concept { text } => f.debug_struct("Concept").field("text", text).finish(),
             Self::YouComResearch { query, result, is_loading } => f.debug_struct("YouComResearch").field("query", query).field("result", result).field("is_loading", is_loading).finish(),
-            Self::GeminiDirector { prompt, script, is_loading } => f.debug_struct("GeminiDirector").field("prompt", prompt).field("script", script).field("is_loading", is_loading).finish(),
+            Self::AgnosticAI { model, prompt, result, is_loading } => f.debug_struct("AgnosticAI").field("model", model).field("prompt", prompt).field("result", result).field("is_loading", is_loading).finish(),
             Self::Visual { prompt, is_loading, .. } => f.debug_struct("Visual").field("prompt", prompt).field("is_loading", is_loading).finish(),
-            Self::FoxitExport { status } => f.debug_struct("FoxitExport").field("status", status).finish(),
+            Self::FoxitExport { status, is_loading } => f.debug_struct("FoxitExport").field("status", status).field("is_loading", is_loading).finish(),
         }
     }
 }
@@ -56,9 +58,9 @@ impl PartialEq for NodeData {
         match (self, other) {
             (Self::Concept { text: a }, Self::Concept { text: b }) => a == b,
             (Self::YouComResearch { query: a, result: b, is_loading: c }, Self::YouComResearch { query: x, result: y, is_loading: z }) => a == x && b == y && c == z,
-            (Self::GeminiDirector { prompt: a, script: b, is_loading: c }, Self::GeminiDirector { prompt: x, script: y, is_loading: z }) => a == x && b == y && c == z,
+            (Self::AgnosticAI { model: a, prompt: b, result: c, is_loading: d }, Self::AgnosticAI { model: w, prompt: x, result: y, is_loading: z }) => a == w && b == x && c == y && d == z,
             (Self::Visual { prompt: a, is_loading: b, .. }, Self::Visual { prompt: x, is_loading: y, .. }) => a == x && b == y,
-            (Self::FoxitExport { status: a }, Self::FoxitExport { status: b }) => a == b,
+            (Self::FoxitExport { status: a, is_loading: b }, Self::FoxitExport { status: x, is_loading: y }) => a == x && b == y,
             _ => false,
         }
     }
@@ -83,7 +85,7 @@ pub struct Node {
 impl Node {
     pub fn new(id: u64, position: Pos2, data: NodeData) -> Self {
         let size = match data {
-            NodeData::GeminiDirector { .. } => Vec2::new(300.0, 400.0),
+            NodeData::AgnosticAI { .. } => Vec2::new(300.0, 450.0),
             _ => Vec2::new(250.0, 300.0),
         };
         Self {
@@ -165,11 +167,12 @@ impl StoryBoardApp {
                 is_loading: false,
             },
         );
-        let g1_id = self.add_node(
+        let a1_id = self.add_node(
             Pos2::new(150.0, -150.0),
-            NodeData::GeminiDirector {
+            NodeData::AgnosticAI {
+                model: "google/gemini-flash-1.5".to_string(),
                 prompt: "Mars Research Results".to_string(),
-                script: None,
+                result: None,
                 is_loading: false,
             },
         );
@@ -185,12 +188,13 @@ impl StoryBoardApp {
             Pos2::new(0.0, 250.0),
             NodeData::FoxitExport {
                 status: "Ready".to_string(),
+                is_loading: false,
             },
         );
 
         self.state.edges.push(Edge { id: 1, from: c1_id, to: r1_id });
-        self.state.edges.push(Edge { id: 2, from: r1_id, to: g1_id });
-        self.state.edges.push(Edge { id: 3, from: g1_id, to: p1_id });
+        self.state.edges.push(Edge { id: 2, from: r1_id, to: a1_id });
+        self.state.edges.push(Edge { id: 3, from: a1_id, to: p1_id });
         self.state.edges.push(Edge { id: 4, from: p1_id, to: f1_id });
     }
 
@@ -242,25 +246,39 @@ impl StoryBoardApp {
         });
     }
 
-    fn trigger_gemini(&self, node_id: u64, prompt: String, ctx: egui::Context) {
+    fn trigger_agnostic_ai(&self, node_id: u64, model: String, prompt: String, ctx: egui::Context) {
         let tx = self.http_tx.clone();
-        let body = serde_json::json!({"prompt": prompt});
+        let body = serde_json::json!({"model": model, "prompt": prompt});
         let body_bytes = serde_json::to_vec(&body).unwrap_or_default();
-        let mut request = ehttp::Request::post("/api/gemini", body_bytes);
+        let mut request = ehttp::Request::post("/api/agnostic-ai", body_bytes);
         request.headers.insert("Content-Type", "application/json");
         
         ehttp::fetch(request, move |result| {
             match result {
                 Ok(response) => {
-                    if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&response.bytes) {
-                        if let Some(text) = json["candidates"][0]["content"]["parts"][0]["text"].as_str() {
-                            let _ = tx.send(AppMessage::TextResponse(node_id, text.to_string()));
-                        } else {
-                             let _ = tx.send(AppMessage::Error(node_id, "Unexpected Gemini JSON structure".to_string()));
-                        }
-                    } else {
-                         let _ = tx.send(AppMessage::Error(node_id, "Failed to parse Gemini JSON".to_string()));
-                    }
+                    let text = response.text().unwrap_or_default().to_string();
+                    let _ = tx.send(AppMessage::TextResponse(node_id, text));
+                }
+                Err(e) => {
+                    let _ = tx.send(AppMessage::Error(node_id, e));
+                }
+            }
+            ctx.request_repaint();
+        });
+    }
+
+    fn trigger_foxit(&self, node_id: u64, content: String, ctx: egui::Context) {
+        let tx = self.http_tx.clone();
+        let body = serde_json::json!({"content": content});
+        let body_bytes = serde_json::to_vec(&body).unwrap_or_default();
+        let mut request = ehttp::Request::post("/api/foxit", body_bytes);
+        request.headers.insert("Content-Type", "application/json");
+        
+        ehttp::fetch(request, move |result| {
+            match result {
+                Ok(response) => {
+                    let text = response.text().unwrap_or_default().to_string();
+                    let _ = tx.send(AppMessage::TextResponse(node_id, text));
                 }
                 Err(e) => {
                     let _ = tx.send(AppMessage::Error(node_id, e));
@@ -323,8 +341,12 @@ impl eframe::App for StoryBoardApp {
                                 *r = Some(text);
                                 *is_loading = false;
                             }
-                            NodeData::GeminiDirector { script: s, is_loading, .. } => {
-                                *s = Some(text);
+                            NodeData::AgnosticAI { result: r, is_loading, .. } => {
+                                *r = Some(text);
+                                *is_loading = false;
+                            }
+                            NodeData::FoxitExport { status, is_loading } => {
+                                *status = text;
                                 *is_loading = false;
                             }
                             _ => {}
@@ -357,8 +379,9 @@ impl eframe::App for StoryBoardApp {
                     if let Some(node) = self.state.nodes.get_mut(&id) {
                         match &mut node.data {
                             NodeData::YouComResearch { is_loading, .. } => *is_loading = false,
-                            NodeData::GeminiDirector { is_loading, .. } => *is_loading = false,
+                            NodeData::AgnosticAI { is_loading, .. } => *is_loading = false,
                             NodeData::Visual { is_loading, .. } => *is_loading = false,
+                            NodeData::FoxitExport { is_loading, .. } => *is_loading = false,
                             _ => {}
                         }
                     }
@@ -465,7 +488,8 @@ impl eframe::App for StoryBoardApp {
                     let mut node_data_changed = false;
                     let mut trigger_research = None;
                     let mut trigger_visualize = None;
-                    let mut trigger_gemini = None;
+                    let mut trigger_agnostic_ai = None;
+                    let mut trigger_foxit = None;
 
                     ui.put(node_rect, |ui: &mut egui::Ui| {
                         frame.show(ui, |ui| {
@@ -473,7 +497,7 @@ impl eframe::App for StoryBoardApp {
                                 let (title, icon) = match &node_data {
                                     NodeData::Concept { .. } => ("Concept", "🧠"),
                                     NodeData::YouComResearch { .. } => ("You.com Research", "🌐"),
-                                    NodeData::GeminiDirector { .. } => ("AI Director", "🎬"),
+                                    NodeData::AgnosticAI { .. } => ("Agnostic AI", "🤖"),
                                     NodeData::Visual { .. } => ("AI Visualizer", "🎨"),
                                     NodeData::FoxitExport { .. } => ("Foxit Export", "📄"),
                                 };
@@ -507,18 +531,25 @@ impl eframe::App for StoryBoardApp {
                                             }
                                         }
                                     }
-                                    NodeData::GeminiDirector { prompt, script, is_loading } => {
-                                        ui.add(egui::TextEdit::multiline(prompt).hint_text("Context for the scene..."));
-                                        if ui.button("Write Scene Script").clicked() {
+                                    NodeData::AgnosticAI { model, prompt, result, is_loading } => {
+                                        ui.label("Model:");
+                                        if ui.text_edit_singleline(model).changed() {
+                                            node_data_changed = true;
+                                        }
+                                        ui.label("Prompt:");
+                                        if ui.text_edit_multiline(prompt).changed() {
+                                            node_data_changed = true;
+                                        }
+                                        if ui.button("Generate Response").clicked() {
                                             *is_loading = true;
                                             node_data_changed = true;
-                                            trigger_gemini = Some(prompt.clone());
+                                            trigger_agnostic_ai = Some((model.clone(), prompt.clone()));
                                         }
                                         if *is_loading {
                                             ui.spinner();
-                                        } else if let Some(s) = script {
-                                            egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
-                                                ui.label(&*s);
+                                        } else if let Some(res) = result {
+                                            egui::ScrollArea::vertical().max_height(150.0).show(ui, |ui| {
+                                                ui.small(res);
                                             });
                                         }
                                     }
@@ -535,9 +566,17 @@ impl eframe::App for StoryBoardApp {
                                             ui.image(&*tex);
                                         }
                                     }
-                                    NodeData::FoxitExport { status } => {
+                                    NodeData::FoxitExport { status, is_loading } => {
                                         ui.label(format!("Status: {}", status));
-                                        if ui.button("Generate PDF Call Sheet").clicked() {}
+                                        if *is_loading {
+                                            ui.spinner();
+                                        } else {
+                                            if ui.button("Generate PDF Call Sheet").clicked() {
+                                                *is_loading = true;
+                                                node_data_changed = true;
+                                                trigger_foxit = Some("Exporting all StoryBoard content to PDF...".to_string());
+                                            }
+                                        }
                                     }
                                 }
                             });
@@ -555,8 +594,11 @@ impl eframe::App for StoryBoardApp {
                     if let Some(p) = trigger_visualize {
                         self.trigger_visualize(id, p, ctx.clone());
                     }
-                    if let Some(g) = trigger_gemini {
-                        self.trigger_gemini(id, g, ctx.clone());
+                    if let Some((m, p)) = trigger_agnostic_ai {
+                        self.trigger_agnostic_ai(id, m, p, ctx.clone());
+                    }
+                    if let Some(c) = trigger_foxit {
+                        self.trigger_foxit(id, c, ctx.clone());
                     }
                 }
             });
